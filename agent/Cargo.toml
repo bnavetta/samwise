@@ -1,0 +1,17 @@
+[package]
+name = "samwise-agent"
+version = "0.1.0"
+authors = ["Ben Navetta <ben.navetta@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[package.metadata.deb]
+depends = "$auto, systemd, grub2-common"
+assets = [
+    [ "deb-assets/50_samwise", "/etc/grub.d/", "644" ]
+
+    # TODO: try CAP_SYS_BOOT first ["deb-assets/10-samwise-agent.rules", "usr/share/polkit-1/rules.d/", "644"]
+]

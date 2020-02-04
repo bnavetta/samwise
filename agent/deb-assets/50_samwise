@@ -1,0 +1,9 @@
+# Use DHCP options to remotely control booting
+# TODO: could use ${net_default_interface}, but it doesn't seem to get set
+net_bootp
+net_get_dhcp_option remote_default efinet0:dhcp 209 string
+
+if [ "x$remote_default" != "x" ]; then
+    set default="$remote_default"
+    set timeout=0
+end

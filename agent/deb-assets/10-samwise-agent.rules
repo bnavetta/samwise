@@ -1,0 +1,12 @@
+// Polkit rule to allow samwise to reboot or shutdown the computer
+
+polkit.addRule(function (action, subject) {
+    // indexOf to allow with and without multiple sessions
+    if (subject.user === "samwise" &&
+        (action.id === "org.freedesktop.login1.set-wall-message" ||
+         action.id.indexOf("org.freedesktop.login1.power-off") === 0 ||
+         action.id.indexOf("org.freedesktop.login1.reboot") === 0)) {
+        polkit.log("Allowing samwise to perform action " + action.id);
+        return polkit.Result.YES;
+    }
+});

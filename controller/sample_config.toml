@@ -1,0 +1,12 @@
+[devices.elessar]
+mac_address = "b4:2e:99:a0:f3:27"
+host = "elessar.local"
+
+[devices.elessar.boot_targets]
+ubuntu = "0"
+windows = "2"
+
+[dhcp]
+server = "Dnsmasq"
+config_path = "/tmp/samwise-dnsmasq.conf"
+

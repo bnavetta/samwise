@@ -1,0 +1,29 @@
+[package]
+name = "samwise-controller"
+version = "0.1.0"
+authors = ["Ben Navetta <ben.navetta@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0"
+askama = "0.9"
+eui48 = "0.4"
+structopt = "0.3"
+toml = "0.5"
+
+[dependencies.serde]
+version = "1.0"
+features = [ "derive" ]
+
+[dependencies.tokio]
+version = "0.2"
+features = [
+    "rt-core",
+    "rt-threaded",
+    "rt-util",
+    "io-util",
+    "fs",
+    "process"
+]
