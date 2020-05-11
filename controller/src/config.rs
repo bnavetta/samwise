@@ -6,15 +6,15 @@ use std::convert::TryFrom;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Error, Result};
-use tokio::fs;
 use eui48::MacAddress;
+use tokio::fs;
 use toml;
 
 use crate::model::*;
 
 #[derive(Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct Configuration {
-    devices: HashMap<String, DeviceConfiguration>
+    devices: HashMap<String, DeviceConfiguration>,
 }
 
 impl Configuration {
@@ -32,15 +32,28 @@ impl Configuration {
         Ok(config)
     }
 
-    pub fn devices<'a>(&'a self) -> impl Iterator<Item=DeviceId> + 'a {
+    pub fn devices<'a>(&'a self) -> impl Iterator<Item = DeviceId> + 'a {
         self.devices.keys().map(DeviceId::new)
+    }
+
+    pub fn device_configs(&self) -> impl Iterator<Item = (DeviceId, &DeviceConfiguration)> {
+        self.devices
+            .iter()
+            .map(|(id, config)| (DeviceId::new(id), config))
     }
 }
 
 /// Configuration for an individual device
 #[derive(Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct DeviceConfiguration {
+    /// Hostname to reach this device
+    host: String,
+}
 
+impl DeviceConfiguration {
+    pub fn host(&self) -> &str {
+        &self.host
+    }
 }
 
 // Config is immutable, parsed on startup, shared with all tasks

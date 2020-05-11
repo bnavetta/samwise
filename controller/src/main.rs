@@ -1,9 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use actix::Actor;
 use anyhow::{Context, Result};
-use slog::{Drain, Logger, o, debug};
+use slog::{debug, o, Drain, Logger};
 use structopt::StructOpt;
 
 use crate::config::Configuration;
@@ -11,8 +10,8 @@ use crate::device_manager::DeviceManager;
 use crate::model::*;
 
 mod config;
-mod model;
 mod device_manager;
+mod model;
 
 #[derive(StructOpt)]
 #[structopt(
@@ -40,18 +39,19 @@ async fn main() -> Result<()> {
     let args = Cli::from_args();
     let logger = create_logger();
 
-    // Use the Tokio runtime instead of actix_rt because actix_rt doesn't support file I/O.
-    let local_set = tokio::task::LocalSet::new();
-    let system = actix::System::run_in_tokio("samwise", &local_set);
-
     debug!(&logger, "Loading configuration"; "path" => args.config_path.display());
     let config = Configuration::load_file(&args.config_path).await?;
 
-    for device in config.devices() {
-        let _ = DeviceManager::new(device, &logger).start();
+    let mut handles = vec![];
+
+    for (device, config) in config.device_configs() {
+        let (_, handle) = DeviceManager::start(device, config, &logger);
+        handles.push(handle);
     }
 
-    local_set.run_until(system).await?;
+    for handle in handles.into_iter() {
+        let _ = handle.await?;
+    }
 
     Ok(())
 }

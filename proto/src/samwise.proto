@@ -1,0 +1,12 @@
+syntax = "proto3";
+package samwise;
+
+service Agent {
+    rpc Ping (PingRequest) returns (PingResponse);
+}
+
+message PingRequest {}
+
+message PingResponse {
+    string current_target = 1;
+}

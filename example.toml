@@ -1,3 +1,2 @@
-[devices.foo]
-
-[devices.bar]
+[devices.local]
+host = "[::1]"
