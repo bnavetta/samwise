@@ -5,17 +5,14 @@ use anyhow::{Context, Result};
 use eui48::MacAddress;
 use tokio::process::Command;
 
-
-
-
 /// Send a Wake-on-LAN magic packet to the given MAC address.
-/// 
+///
 /// To send the magic packet, this function calls `etherwake`.
-/// 
+///
 /// # Arguments
 /// `mac_address`
 ///     the MAC address of the target computer
-/// 
+///
 /// # Errors
 /// * If `etherwake` is not in the `PATH`
 /// * If the MAC address is invalid
