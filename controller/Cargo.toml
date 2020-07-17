@@ -8,20 +8,23 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-askama = "0.9"
-eui48 = "0.4"
+askama = "0.10"
 slog = "2.5"
 slog-async = "2.5"
 slog-term = "2.5"
 structopt = "0.3"
 toml = "0.5"
-tonic = "0.2"
+tonic = "0.3"
 
 samwise-proto = { path = "../proto" }
 
 [dependencies.serde]
 version = "1.0"
 features = [ "derive" ]
+
+[dependencies.pnet]
+version = "0.26"
+features = [ "serde" ]
 
 [dependencies.tokio]
 version = "0.2"
@@ -33,6 +36,7 @@ features = [
     "io-util",
     "fs",
     "process",
+    "signal",
     "time",
     "sync"
 ]

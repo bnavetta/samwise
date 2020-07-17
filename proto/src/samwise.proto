@@ -1,8 +1,19 @@
 syntax = "proto3";
 package samwise;
 
+// Service interface for the Samwise agent running on a device. The controller uses this to manage the device while it's
+// running.
 service Agent {
+    // Ping the agent to check if the device is up and if so, which target it's running.
     rpc Ping (PingRequest) returns (PingResponse);
+
+    // Tell the agent to reboot the device.
+    rpc Reboot (RebootRequest) returns (RebootResponse);
+
+    // Tell the agent to put the device to sleep.
+    rpc Suspend (SuspendRequest) returns (SuspendResponse);
+
+    rpc ShutDown (ShutdownRequest) returns (ShutdownResponse);
 }
 
 message PingRequest {}
@@ -10,3 +21,17 @@ message PingRequest {}
 message PingResponse {
     string current_target = 1;
 }
+
+message RebootRequest {}
+
+message RebootResponse {}
+
+message SuspendRequest {
+    // TODO: allow hibernation instead?
+}
+
+message SuspendResponse {}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}
