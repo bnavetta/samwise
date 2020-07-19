@@ -11,12 +11,10 @@ use tokio::sync::watch;
 use crate::config::Configuration;
 use crate::device::Device;
 use crate::id::DeviceId;
-use crate::shutdown::Shutdown;
 use crate::wake::Waker;
 
 mod agent;
 mod device;
-mod shutdown;
 mod wake;
 
 mod config;
@@ -49,13 +47,13 @@ pub struct Samwise {
     config: Configuration,
     waker: Waker,
     devices: HashMap<DeviceId, Device>,
-    shutdown_tx: watch::Sender<bool>,
-    shutdown_rx: watch::Receiver<bool>,
+    shutdown_tx: watch::Sender<()>,
+    shutdown_rx: watch::Receiver<()>,
 }
 
 impl Samwise {
     fn new(logger: Logger, config: Configuration) -> Samwise {
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
         Samwise {
             logger,
             config,
@@ -81,7 +79,13 @@ impl Samwise {
 
     async fn setup_devices(&mut self) -> Result<()> {
         for id in self.config.devices() {
-            let device = Device::start(id.clone(), &self.config, self.waker.clone(), &self.logger)?;
+            let device = Device::start(
+                id.clone(),
+                &self.config,
+                self.waker.clone(),
+                self.shutdown_rx.clone(),
+                &self.logger,
+            )?;
 
             self.devices.insert(id, device);
         }
@@ -92,18 +96,18 @@ impl Samwise {
     async fn shutdown(self) -> Result<()> {
         let Samwise {
             logger,
+            devices,
             mut shutdown_tx,
             shutdown_rx,
             ..
         } = self;
 
-        drop(shutdown_rx); // Drop this so the closed().await below can complete
-
         info!(&logger, "Shutting down");
-        shutdown_tx
-            .broadcast(true)
-            .context("Could not send shutdown signal")?;
-        // Wait for all device handlers to drop their Shutdowns
+
+        drop(shutdown_rx); // Otherwise the .closed() call below will never complete
+        drop(devices); // This will close channels to devices and allow them to shut down
+
+        // Wait for all spawned tasks to drop their shutdown receivers
         shutdown_tx.closed().await;
         Ok(())
     }

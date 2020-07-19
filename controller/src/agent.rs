@@ -3,7 +3,7 @@ use slog::{o, trace, Logger};
 use tonic::transport::{Channel, Endpoint};
 
 use samwise_proto::agent_client::AgentClient;
-use samwise_proto::PingRequest;
+use samwise_proto::{PingRequest, RebootRequest, ShutdownRequest, SuspendRequest};
 
 use crate::id::TargetId;
 
@@ -42,10 +42,37 @@ impl AgentConnection {
                 let target_id = TargetId::new(response.into_inner().current_target);
                 AgentStatus::Active(target_id)
             }
-            Err(e) => {
-                trace!(&self.logger, "Pinging agent failed");
+            Err(error) => {
+                trace!(&self.logger, "Pinging agent failed: {}", error);
                 AgentStatus::Inactive
             }
         }
+    }
+
+    pub async fn reboot(&mut self) -> Result<()> {
+        let req = tonic::Request::new(RebootRequest {});
+        self.client
+            .reboot(req)
+            .await
+            .context("Rebooting via agent failed")?;
+        Ok(())
+    }
+
+    pub async fn suspend(&mut self) -> Result<()> {
+        let req = tonic::Request::new(SuspendRequest {});
+        self.client
+            .suspend(req)
+            .await
+            .context("Suspending via agent failed")?;
+        Ok(())
+    }
+
+    pub async fn shut_down(&mut self) -> Result<()> {
+        let req = tonic::Request::new(ShutdownRequest {});
+        self.client
+            .shut_down(req)
+            .await
+            .context("Shutting down via agent failed")?;
+        Ok(())
     }
 }

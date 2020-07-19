@@ -1,3 +1,5 @@
+use core::fmt;
+
 use anyhow::{anyhow, bail, Context, Result};
 use pnet::util::MacAddr;
 use slog::{debug, error, o, trace, Logger};
@@ -9,7 +11,6 @@ use tokio::time::Duration;
 use crate::agent::{AgentConnection, AgentStatus};
 use crate::config::{Configuration, DeviceConfiguration};
 use crate::id::{DeviceId, TargetId};
-use crate::shutdown::Shutdown;
 use crate::wake::Waker;
 
 // Device structure:
@@ -49,11 +50,23 @@ pub enum Action {
     Run(TargetId),
 }
 
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Action::Reboot => f.write_str("reboot"),
+            Action::Suspend => f.write_str("suspend"),
+            Action::ShutDown => f.write_str("shut down"),
+            Action::Run(target) => write!(f, "run {}", target),
+        }
+    }
+}
+
 /// Task which polls the agent service on a device to detect state changes.
 async fn state_poller(
     logger: Logger,
     mut agent: AgentConnection,
     mut state_tx: watch::Sender<State>,
+    shutdown_rx: watch::Receiver<()>,
 ) {
     // TODO: may want to make this configurable
     let mut tick = time::interval(PING_INTERVAL);
@@ -75,7 +88,8 @@ async fn state_poller(
         }
     }
 
-    trace!(&logger, "Closing state poller")
+    trace!(&logger, "Closing state poller");
+    drop(shutdown_rx); // Signal that we're done
 }
 
 struct Handler {
@@ -89,18 +103,28 @@ struct Handler {
 
     state_rx: watch::Receiver<State>,
     action_rx: mpsc::Receiver<Action>,
+
+    /// Receiver for signaling that this handler task has exited. When the Handler is dropped, the
+    /// channel will automatically be closed
+    shutdown_rx: watch::Receiver<()>,
 }
 
 impl Handler {
     async fn process(&mut self) -> Result<()> {
         loop {
             match self.action_rx.recv().await {
-                Some(action) => match action {
-                    Action::Run(target) => self.handle_run(target).await?,
-                    Action::Reboot => self.handle_reboot().await?,
-                    Action::Suspend => self.handle_suspend().await?,
-                    Action::ShutDown => self.handle_shutdown().await?,
-                },
+                Some(action) => {
+                    let result = match action {
+                        Action::Run(ref target) => self.handle_run(target).await,
+                        Action::Reboot => self.handle_reboot().await,
+                        Action::Suspend => self.handle_suspend().await,
+                        Action::ShutDown => self.handle_shutdown().await,
+                    };
+
+                    if let Err(error) = result {
+                        error!(&self.logger, "Handling {} action failed: {}", action, error);
+                    }
+                }
                 None => {
                     // If action_rx returns None, all sending handles have been dropped and the
                     // processing loop can end.
@@ -118,10 +142,10 @@ impl Handler {
     // the agent with pings.
 
     /// Handles a `Run` action.
-    async fn handle_run(&mut self, target: TargetId) -> Result<()> {
+    async fn handle_run(&mut self, target: &TargetId) -> Result<()> {
         debug!(&self.logger, "Told to run {}", target);
         match self.agent.ping().await {
-            AgentStatus::Active(active_target) => {
+            AgentStatus::Active(ref active_target) => {
                 if active_target == target {
                     debug!(&self.logger, "Already running {}", target);
                     Ok(())
@@ -130,7 +154,8 @@ impl Handler {
                         &self.logger,
                         "Running {}, but {} requested - will reboot", active_target, target
                     );
-                    unimplemented!("TODO: reboot");
+                    unimplemented!("TODO: reconfigure");
+                    self.agent.reboot().await?;
                     self.await_running_target(target).await
                 }
             }
@@ -148,8 +173,8 @@ impl Handler {
         match self.agent.ping().await {
             AgentStatus::Active(target) => {
                 debug!(&self.logger, "Rebooting to {}", target);
-                unimplemented!("TODO: reboot");
-                self.await_running_target(target).await
+                self.agent.reboot().await?;
+                self.await_running_target(&target).await
             }
             AgentStatus::Inactive => {
                 debug!(&self.logger, "Not running - will boot");
@@ -166,7 +191,7 @@ impl Handler {
         match self.agent.ping().await {
             AgentStatus::Active(target) => {
                 debug!(&self.logger, "Running {} - will suspend", target);
-                unimplemented!("TODO: suspend");
+                self.agent.suspend().await?;
                 self.await_off().await
             }
             AgentStatus::Inactive => {
@@ -182,7 +207,7 @@ impl Handler {
         match self.agent.ping().await {
             AgentStatus::Active(target) => {
                 debug!(&self.logger, "Running {} - will shut down", target);
-                unimplemented!("TODO: shut down");
+                self.agent.shut_down().await?;
                 self.await_off().await
             }
             AgentStatus::Inactive => {
@@ -201,9 +226,9 @@ impl Handler {
     }
 
     /// Waits for the device to be running a particular target.
-    async fn await_running_target(&self, target: TargetId) -> Result<()> {
+    async fn await_running_target(&self, target: &TargetId) -> Result<()> {
         self.await_state(|state| match state {
-            State::Running(ref current_target) => current_target == &target,
+            State::Running(ref current_target) => current_target == target,
             _ => false,
         })
         .await
@@ -259,6 +284,7 @@ impl Device {
         id: DeviceId,
         config: &Configuration,
         waker: Waker,
+        shutdown_rx: watch::Receiver<()>,
         logger: &Logger,
     ) -> Result<Device> {
         let device_config = match config.device_config(&id) {
@@ -275,7 +301,13 @@ impl Device {
 
         let state_logger = logger.clone();
         let state_agent = agent.clone();
-        let _ = tokio::spawn(state_poller(state_logger, state_agent, state_tx));
+        let state_shutdown_rx = shutdown_rx.clone();
+        let _ = tokio::spawn(state_poller(
+            state_logger,
+            state_agent,
+            state_tx,
+            state_shutdown_rx,
+        ));
 
         let mut handler = Handler {
             id: id.clone(),
@@ -289,6 +321,7 @@ impl Device {
             waker,
             state_rx: state_rx.clone(),
             action_rx,
+            shutdown_rx,
         };
 
         let _ = tokio::spawn(async move {
