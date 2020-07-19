@@ -80,23 +80,9 @@ impl Samwise {
     }
 
     async fn setup_devices(&mut self) -> Result<()> {
-        for (id, device_config) in self.config.device_configs() {
-            let (device, mut handler) = device::new_device(
-                id.clone(),
-                config,
-                device_config,
-                self.waker.clone(),
-                Shutdown::new(self.shutdown_rx.clone()),
-                &self.logger,
-            )?;
+        for id in self.config.devices() {
+            let device = Device::start(id.clone(), &self.config, self.waker.clone(), &self.logger)?;
 
-            let logger = self.logger.clone();
-            let id2 = id.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handler.run().await {
-                    error!(logger, "Device {} failed: {}", id2, e);
-                }
-            });
             self.devices.insert(id, device);
         }
 

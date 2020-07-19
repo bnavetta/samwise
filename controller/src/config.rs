@@ -41,6 +41,10 @@ impl Configuration {
             .map(|(id, config)| (DeviceId::new(id), config))
     }
 
+    pub fn device_config(&self, id: &DeviceId) -> Option<&DeviceConfiguration> {
+        self.devices.get(id.as_string())
+    }
+
     /// Name of the default network interface to use for devices that do not specify one.
     pub fn default_interface(&self) -> &str {
         &self.default_interface

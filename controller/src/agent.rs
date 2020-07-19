@@ -12,6 +12,9 @@ pub enum AgentStatus {
     Inactive,
 }
 
+// Cloning Tonic `Channel`s is cheap and encouraged, so cloning `AgentConnection` is as well
+
+#[derive(Clone)]
 pub struct AgentConnection {
     logger: Logger,
     client: AgentClient<Channel>,

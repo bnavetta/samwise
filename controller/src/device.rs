@@ -1,5 +1,6 @@
-use anyhow::{Context, Result};
-use slog::{debug, o, Logger};
+use anyhow::{anyhow, bail, Context, Result};
+use pnet::util::MacAddr;
+use slog::{debug, error, o, trace, Logger};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::time;
@@ -10,30 +11,25 @@ use crate::config::{Configuration, DeviceConfiguration};
 use crate::id::{DeviceId, TargetId};
 use crate::shutdown::Shutdown;
 use crate::wake::Waker;
-use pnet::util::MacAddr;
+
+// Device structure:
+// - For each device, there are two tasks and 1+ (cheaply clonable) handles
+// - One task periodically pings the agent for updates, sending them to a watch channel
+// - One task responds to commands (to ensure that only one command is processed at a time)
+// - The handle can pull state updates and send commands
+// - When all handles have been dropped, the background tasks automatically terminate
+
+/// Frequency at which to ping the agent for state changes
+const PING_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Timeout when waiting for the device to complete an action
+const ACTION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
 pub struct Device {
     id: DeviceId,
-    latest_state: State,
     state_rx: watch::Receiver<State>,
     action_tx: mpsc::Sender<Action>,
-}
-
-/// Per-device handler
-pub struct DeviceHandler {
-    id: DeviceId,
-    logger: Logger,
-
-    agent: AgentConnection,
-
-    mac_addr: MacAddr,
-    network_interface: String,
-    waker: Waker,
-
-    shutdown: Shutdown,
-    state_tx: watch::Sender<State>,
-    action_rx: mpsc::Receiver<Action>,
 }
 
 /// Current state of a device.
@@ -53,47 +49,261 @@ pub enum Action {
     Run(TargetId),
 }
 
-pub fn new_device(
+/// Task which polls the agent service on a device to detect state changes.
+async fn state_poller(
+    logger: Logger,
+    mut agent: AgentConnection,
+    mut state_tx: watch::Sender<State>,
+) {
+    // TODO: may want to make this configurable
+    let mut tick = time::interval(PING_INTERVAL);
+
+    loop {
+        tokio::select! {
+            _ = state_tx.closed() => break,
+            _ = tick.tick() => {
+                let state = match agent.ping().await {
+                    AgentStatus::Active(target) => State::Running(target),
+                    AgentStatus::Inactive => State::Off,
+                };
+
+                // SendError from a watch channel also means it's closed
+                if let Err(_) = state_tx.broadcast(state) {
+                    break;
+                }
+            }
+        }
+    }
+
+    trace!(&logger, "Closing state poller")
+}
+
+struct Handler {
     id: DeviceId,
-    config: &Configuration,
-    device_config: &DeviceConfiguration,
+    logger: Logger,
+    agent: AgentConnection,
+
+    mac_address: MacAddr,
+    network_interface: String,
     waker: Waker,
-    shutdown: Shutdown,
-    logger: &Logger,
-) -> Result<(Device, DeviceHandler)> {
-    let logger = logger.new(o!("device" => id.clone()));
-    let agent = AgentConnection::new(device_config.agent().to_string(), &logger)?;
 
-    let (state_tx, state_rx) = watch::channel(State::Unknown);
-    let (action_tx, action_rx) = mpsc::channel(1);
+    state_rx: watch::Receiver<State>,
+    action_rx: mpsc::Receiver<Action>,
+}
 
-    let network_interface = device_config
-        .interface()
-        .unwrap_or(config.default_interface());
+impl Handler {
+    async fn process(&mut self) -> Result<()> {
+        loop {
+            match self.action_rx.recv().await {
+                Some(action) => match action {
+                    Action::Run(target) => self.handle_run(target).await?,
+                    Action::Reboot => self.handle_reboot().await?,
+                    Action::Suspend => self.handle_suspend().await?,
+                    Action::ShutDown => self.handle_shutdown().await?,
+                },
+                None => {
+                    // If action_rx returns None, all sending handles have been dropped and the
+                    // processing loop can end.
+                    break;
+                }
+            }
+        }
 
-    let handler = DeviceHandler {
-        id: id.clone(),
-        logger,
-        agent,
-        waker,
-        network_interface: network_interface.to_string(),
-        mac_addr: device_config.mac_address(),
-        shutdown,
-        state_tx,
-        action_rx,
-    };
+        trace!(&self.logger, "Closing action handler");
+        Ok(())
+    }
 
-    let device = Device {
-        id,
-        latest_state: State::Unknown,
-        state_rx,
-        action_tx,
-    };
+    // When handling an action, ping initially to make sure we're acting on up-to-date state. When
+    // looping to wait for an action to finish after that, always use self.state_rx to avoid spamming
+    // the agent with pings.
 
-    Ok((device, handler))
+    /// Handles a `Run` action.
+    async fn handle_run(&mut self, target: TargetId) -> Result<()> {
+        debug!(&self.logger, "Told to run {}", target);
+        match self.agent.ping().await {
+            AgentStatus::Active(active_target) => {
+                if active_target == target {
+                    debug!(&self.logger, "Already running {}", target);
+                    Ok(())
+                } else {
+                    debug!(
+                        &self.logger,
+                        "Running {}, but {} requested - will reboot", active_target, target
+                    );
+                    unimplemented!("TODO: reboot");
+                    self.await_running_target(target).await
+                }
+            }
+            AgentStatus::Inactive => {
+                debug!(&self.logger, "Not running - will boot");
+                self.boot().await?;
+                self.await_running_target(target).await
+            }
+        }
+    }
+
+    /// Handles a `Reboot` action.
+    async fn handle_reboot(&mut self) -> Result<()> {
+        debug!(&self.logger, "Told to reboot");
+        match self.agent.ping().await {
+            AgentStatus::Active(target) => {
+                debug!(&self.logger, "Rebooting to {}", target);
+                unimplemented!("TODO: reboot");
+                self.await_running_target(target).await
+            }
+            AgentStatus::Inactive => {
+                debug!(&self.logger, "Not running - will boot");
+                self.boot().await?;
+                // Can't wait for a specific target since we don't know what was running previously
+                self.await_running().await
+            }
+        }
+    }
+
+    /// Handles a `Suspend` action.
+    async fn handle_suspend(&mut self) -> Result<()> {
+        debug!(&self.logger, "Told to suspend");
+        match self.agent.ping().await {
+            AgentStatus::Active(target) => {
+                debug!(&self.logger, "Running {} - will suspend", target);
+                unimplemented!("TODO: suspend");
+                self.await_off().await
+            }
+            AgentStatus::Inactive => {
+                debug!(&self.logger, "Already off or suspended");
+                Ok(())
+            }
+        }
+    }
+
+    /// Handles a `ShutDown` action.
+    async fn handle_shutdown(&mut self) -> Result<()> {
+        debug!(&self.logger, "Told to shut down");
+        match self.agent.ping().await {
+            AgentStatus::Active(target) => {
+                debug!(&self.logger, "Running {} - will shut down", target);
+                unimplemented!("TODO: shut down");
+                self.await_off().await
+            }
+            AgentStatus::Inactive => {
+                debug!(&self.logger, "Already off or suspended");
+                Ok(())
+            }
+        }
+    }
+
+    /// Boot the device via Wake-on-LAN.
+    async fn boot(&mut self) -> Result<()> {
+        self.waker
+            .wake(self.network_interface.clone(), self.mac_address)
+            .await
+            .with_context(|| format!("Could not wake {}", self.id))
+    }
+
+    /// Waits for the device to be running a particular target.
+    async fn await_running_target(&self, target: TargetId) -> Result<()> {
+        self.await_state(|state| match state {
+            State::Running(ref current_target) => current_target == &target,
+            _ => false,
+        })
+        .await
+    }
+
+    /// Waits for the device to be in any running state.
+    async fn await_running(&self) -> Result<()> {
+        self.await_state(|state| match state {
+            State::Running(_) => true,
+            _ => false,
+        })
+        .await
+    }
+
+    /// Waits for the device to be off or suspended.
+    async fn await_off(&self) -> Result<()> {
+        self.await_state(|state| state == &State::Off).await
+    }
+
+    /// Waits for the device to be in a given state. Fails if the state-polling task exits in the
+    /// background or the device takes too long to reach the desired state.
+    async fn await_state<F>(&self, pred: F) -> Result<()>
+    where
+        F: Fn(&State) -> bool,
+    {
+        let mut state_rx = self.state_rx.clone();
+        time::timeout(ACTION_TIMEOUT, async {
+            // Check if the device is already in the desired state before looping, since recv() will
+            // only yield any given state change once
+            if pred(&*state_rx.borrow()) {
+                Ok(())
+            } else {
+                loop {
+                    match state_rx.recv().await {
+                        Some(ref current_state) => {
+                            if pred(current_state) {
+                                break Ok(());
+                            }
+                        }
+                        // If the state update channel closed, we'll never get notified for the desired state
+                        None => break Err(anyhow!("State channel closed")),
+                    }
+                }
+            }
+        })
+        .await
+        .context("Timed out waiting for device to reach desired state")?
+    }
 }
 
 impl Device {
+    pub fn start(
+        id: DeviceId,
+        config: &Configuration,
+        waker: Waker,
+        logger: &Logger,
+    ) -> Result<Device> {
+        let device_config = match config.device_config(&id) {
+            Some(config) => config,
+            None => bail!("Missing configuration for {}", id),
+        };
+
+        let logger = logger.new(o!("device" => id.clone()));
+        let agent = AgentConnection::new(device_config.agent().to_string(), &logger)
+            .with_context(|| format!("Bad agent for device {}", id))?;
+
+        let (state_tx, state_rx) = watch::channel(State::Unknown);
+        let (action_tx, action_rx) = mpsc::channel(1);
+
+        let state_logger = logger.clone();
+        let state_agent = agent.clone();
+        let _ = tokio::spawn(state_poller(state_logger, state_agent, state_tx));
+
+        let mut handler = Handler {
+            id: id.clone(),
+            logger,
+            agent,
+            mac_address: device_config.mac_address(),
+            network_interface: device_config
+                .interface()
+                .unwrap_or(config.default_interface())
+                .to_string(),
+            waker,
+            state_rx: state_rx.clone(),
+            action_rx,
+        };
+
+        let _ = tokio::spawn(async move {
+            if let Err(e) = handler.process().await {
+                error!(handler.logger, "Handler failed: {}", e);
+            }
+        });
+
+        Ok(Device {
+            id,
+            state_rx,
+            action_tx,
+        })
+    }
+
     /// Tells the device to perform an action.
     pub async fn action(&mut self, action: Action) -> Result<()> {
         self.action_tx
@@ -103,136 +313,16 @@ impl Device {
     }
 
     /// The most recent observed state of this device.
-    pub fn latest_state(&self) -> &State {
-        &self.latest_state
+    pub fn latest_state(&self) -> State {
+        self.state_rx.borrow().clone()
     }
 
     /// Poll for state updates.
-    pub async fn recv_state(&mut self) {
+    pub async fn recv_state(&mut self) -> Result<State> {
         if let Some(state) = self.state_rx.recv().await {
-            self.latest_state = state
+            Ok(state)
+        } else {
+            bail!("State channel closed");
         }
-    }
-}
-
-impl DeviceHandler {
-    pub async fn run(&mut self) -> Result<()> {
-        debug!(&self.logger, "Starting device handler");
-
-        // Broadcast the device's initial state
-        self.poll_state().await?;
-
-        let mut poll = time::interval(Duration::from_secs(5));
-
-        while !self.shutdown.is_shutdown() {
-            let action = tokio::select! {
-                action = self.action_rx.recv() => action,
-                _ = poll.tick() => {
-                    self.poll_state().await?;
-                    None
-                },
-                _ = self.shutdown.recv() => None
-            };
-
-            if let Some(action) = action {
-                self.handle(action).await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn handle(&mut self, action: Action) -> Result<()> {
-        debug!(&self.logger, "Handling action {:?}", action);
-        match action {
-            Action::Run(target) => self.handle_run(target).await?,
-            Action::Reboot => self.handle_reboot().await?,
-            Action::Suspend => self.handle_suspend().await?,
-            Action::ShutDown => self.handle_shutdown().await?,
-        }
-
-        Ok(())
-    }
-
-    async fn handle_run(&mut self, target: TargetId) -> Result<()> {
-        match self.agent.ping().await {
-            AgentStatus::Active(active) if active == target => {
-                debug!(&self.logger, "Already running {}", active);
-            }
-            AgentStatus::Active(other) => {
-                debug!(&self.logger, "Running {}, but {} requested", other, target);
-                // TODO: configure
-                // TODO: reboot
-            }
-            AgentStatus::Inactive => {
-                debug!(&self.logger, "Not currently running");
-                // TODO: configure
-                // TODO: boot
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn handle_reboot(&mut self) -> Result<()> {
-        match self.agent.ping().await {
-            AgentStatus::Active(target) => {
-                debug!(&self.logger, "Rebooting to {}", target);
-                // TODO: reboot
-            }
-            AgentStatus::Inactive => {
-                debug!(&self.logger, "Booting from inactive state");
-                // TODO: boot
-            }
-        }
-        Ok(())
-    }
-
-    async fn handle_suspend(&mut self) -> Result<()> {
-        match self.agent.ping().await {
-            AgentStatus::Active(target) => {
-                debug!(&self.logger, "Suspending from {}", target);
-                // TODO: suspend
-            }
-            AgentStatus::Inactive => {
-                debug!(&self.logger, "Already inactive");
-            }
-        }
-        Ok(())
-    }
-
-    async fn handle_shutdown(&mut self) -> Result<()> {
-        match self.agent.ping().await {
-            AgentStatus::Active(target) => {
-                debug!(&self.logger, "Shutting down from {}", target);
-                // TODO: shut down
-            }
-            AgentStatus::Inactive => {
-                debug!(&self.logger, "Already inactive");
-            }
-        }
-        Ok(())
-    }
-
-    async fn boot(&mut self) -> Result<()> {
-        debug!(&self.logger, "Booting device");
-        self.waker.wake(self.config.interface())
-    }
-
-    async fn poll_state(&mut self) -> Result<()> {
-        debug!(&self.logger, "Polling agent to update state");
-        match self.agent.ping().await {
-            AgentStatus::Active(target) => self.publish_state(State::Running(target))?,
-            AgentStatus::Inactive => self.publish_state(State::Off)?,
-        }
-        Ok(())
-    }
-
-    fn publish_state(&mut self, state: State) -> Result<()> {
-        debug!(&self.logger, "Entering state {:?}", state);
-        self.state_tx
-            .broadcast(state)
-            .context("Could not publish device state")?;
-        Ok(())
     }
 }

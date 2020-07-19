@@ -2,7 +2,10 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use samwise_proto::agent_server::{Agent, AgentServer};
-use samwise_proto::{PingRequest, PingResponse};
+use samwise_proto::{
+    PingRequest, PingResponse, RebootRequest, RebootResponse, ShutdownRequest, ShutdownResponse,
+    SuspendRequest, SuspendResponse,
+};
 
 struct AgentImpl;
 
@@ -14,6 +17,30 @@ impl Agent for AgentImpl {
             current_target: "linux".to_string(),
         };
         Ok(Response::new(reply))
+    }
+
+    async fn reboot(
+        &self,
+        request: Request<RebootRequest>,
+    ) -> Result<Response<RebootResponse>, Status> {
+        println!("TODO: reboot");
+        Ok(Response::new(RebootResponse {}))
+    }
+
+    async fn shut_down(
+        &self,
+        request: Request<ShutdownRequest>,
+    ) -> Result<Response<ShutdownResponse>, Status> {
+        println!("TODO: shut down");
+        Ok(Response::new(ShutdownResponse {}))
+    }
+
+    async fn suspend(
+        &self,
+        request: Request<SuspendRequest>,
+    ) -> Result<Response<SuspendResponse>, Status> {
+        println!("TODO: suspend");
+        Ok(Response::new(SuspendResponse {}))
     }
 }
 
