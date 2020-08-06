@@ -8,10 +8,9 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-askama = "0.10"
 slog = "2.5"
 slog-async = "2.5"
-slog-term = "2.5"
+slog-term = "2.6"
 structopt = "0.3"
 toml = "0.5"
 tonic = "0.3"
@@ -36,7 +35,6 @@ features = [
     "io-util",
     "fs",
     "process",
-    "signal",
     "time",
     "sync"
 ]

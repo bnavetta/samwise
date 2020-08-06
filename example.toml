@@ -1,5 +1,11 @@
-default_interface = "eth0"
+default_interface = "enp5s0"
+
+tftp_directory = "target/tftp"
 
 [devices.local]
 agent = "http://[::1]:8673"
 mac_address = "b4:2e:99:a0:f3:27"
+grub_config = "local.cfg"
+
+[devices.local.targets.windows]
+menu_entry = "Windows Boot Manager (on /dev/nvme0n1p2)"

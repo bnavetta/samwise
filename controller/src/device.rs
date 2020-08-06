@@ -1,15 +1,19 @@
-use core::fmt;
+use std::collections::HashMap;
+use std::fmt;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
 use pnet::util::MacAddr;
 use slog::{debug, error, o, trace, Logger};
+use tokio::io::*;
+use tokio::fs::OpenOptions;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::time;
 use tokio::time::Duration;
 
 use crate::agent::{AgentConnection, AgentStatus};
-use crate::config::{Configuration, DeviceConfiguration};
+use crate::config::{Configuration, TargetConfiguration};
 use crate::id::{DeviceId, TargetId};
 use crate::wake::Waker;
 
@@ -25,6 +29,9 @@ const PING_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Timeout when waiting for the device to complete an action
 const ACTION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Name of the GRUB environment variable to set with the desired menu entry.
+const GRUB_MENU_ENTRY_VAR: &str = "samwise_entry";
 
 #[derive(Clone)]
 pub struct Device {
@@ -81,7 +88,7 @@ async fn state_poller(
                 };
 
                 // SendError from a watch channel also means it's closed
-                if let Err(_) = state_tx.broadcast(state) {
+                if state_tx.broadcast(state).is_err() {
                     break;
                 }
             }
@@ -100,36 +107,29 @@ struct Handler {
     mac_address: MacAddr,
     network_interface: String,
     waker: Waker,
+    targets: HashMap<String, TargetConfiguration>,
+    grub_config: PathBuf,
 
     state_rx: watch::Receiver<State>,
     action_rx: mpsc::Receiver<Action>,
 
     /// Receiver for signaling that this handler task has exited. When the Handler is dropped, the
     /// channel will automatically be closed
-    shutdown_rx: watch::Receiver<()>,
+    _shutdown_rx: watch::Receiver<()>,
 }
 
 impl Handler {
     async fn process(&mut self) -> Result<()> {
-        loop {
-            match self.action_rx.recv().await {
-                Some(action) => {
-                    let result = match action {
-                        Action::Run(ref target) => self.handle_run(target).await,
-                        Action::Reboot => self.handle_reboot().await,
-                        Action::Suspend => self.handle_suspend().await,
-                        Action::ShutDown => self.handle_shutdown().await,
-                    };
+        while let Some(action) = self.action_rx.recv().await {
+            let result = match action {
+                Action::Run(ref target) => self.handle_run(target).await,
+                Action::Reboot => self.handle_reboot().await,
+                Action::Suspend => self.handle_suspend().await,
+                Action::ShutDown => self.handle_shutdown().await,
+            };
 
-                    if let Err(error) = result {
-                        error!(&self.logger, "Handling {} action failed: {}", action, error);
-                    }
-                }
-                None => {
-                    // If action_rx returns None, all sending handles have been dropped and the
-                    // processing loop can end.
-                    break;
-                }
+            if let Err(error) = result {
+                error!(&self.logger, "Handling {} action failed: {:?}", action, error);
             }
         }
 
@@ -154,13 +154,14 @@ impl Handler {
                         &self.logger,
                         "Running {}, but {} requested - will reboot", active_target, target
                     );
-                    unimplemented!("TODO: reconfigure");
+                    self.configure(target).await?;
                     self.agent.reboot().await?;
                     self.await_running_target(target).await
                 }
             }
             AgentStatus::Inactive => {
                 debug!(&self.logger, "Not running - will boot");
+                self.configure(target).await?;
                 self.boot().await?;
                 self.await_running_target(target).await
             }
@@ -217,6 +218,26 @@ impl Handler {
         }
     }
 
+    /// Configure the device to load a specific target on next boot
+    async fn configure(&mut self, target: &TargetId) -> Result<()> {
+        match self.targets.get(target.as_string()) {
+            Some(target) => {
+                // Expect the file to already exist so that we don't have to worry about TFTP-server-specific permissions issues. For example,
+                // dnsmasq in secure mode requires that it own all TFTP files.
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&self.grub_config)
+                    .await.with_context(|| format!("Could not open GRUB config file `{}`", self.grub_config.display()))?;
+
+                let contents = format!("set {}=\"{}\"\nexport {}\n", GRUB_MENU_ENTRY_VAR, target.menu_entry(), GRUB_MENU_ENTRY_VAR);
+                file.write_all(contents.as_bytes()).await.with_context(|| format!("Could not write to GRUB config file `{}`", self.grub_config.display()))?;
+                Ok(())
+            },
+            None => bail!("No such target `{}`", target),
+        }
+    }
+
     /// Boot the device via Wake-on-LAN.
     async fn boot(&mut self) -> Result<()> {
         self.waker
@@ -236,10 +257,7 @@ impl Handler {
 
     /// Waits for the device to be in any running state.
     async fn await_running(&self) -> Result<()> {
-        self.await_state(|state| match state {
-            State::Running(_) => true,
-            _ => false,
-        })
+        self.await_state(|state| matches!(state, State::Running(_)))
         .await
     }
 
@@ -316,12 +334,14 @@ impl Device {
             mac_address: device_config.mac_address(),
             network_interface: device_config
                 .interface()
-                .unwrap_or(config.default_interface())
+                .unwrap_or_else(|| config.default_interface())
                 .to_string(),
             waker,
+            targets: device_config.targets().clone(),
+            grub_config: config.tftp_directory().join(device_config.grub_config()),
             state_rx: state_rx.clone(),
             action_rx,
-            shutdown_rx,
+            _shutdown_rx: shutdown_rx,
         };
 
         let _ = tokio::spawn(async move {

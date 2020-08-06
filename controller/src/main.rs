@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use slog::{debug, error, info, o, Drain, Logger};
+use slog::{debug, info, o, Drain, Logger};
 use structopt::StructOpt;
 use tokio::signal;
 use tokio::sync::watch;
 
 use crate::config::Configuration;
-use crate::device::Device;
-use crate::id::DeviceId;
+use crate::device::{Device, Action};
+use crate::id::{DeviceId, TargetId};
 use crate::wake::Waker;
 
 mod agent;
@@ -68,6 +68,10 @@ impl Samwise {
         info!(&self.logger, "Starting Samwise controller");
         self.setup_devices().await?;
         info!(&self.logger, "Controller started");
+
+        for device in self.devices.values_mut() {
+            device.action(Action::Run(TargetId::new("windows"))).await?;
+        }
 
         signal::ctrl_c()
             .await
