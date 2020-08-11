@@ -2,19 +2,19 @@
 listen_address = "[::1]:9090"
 
 # Default network interface when sending WoL packets. Can be overridden per-device
-default_interface = "enp5s0"
+default_interface = "eth0"
 
 # Root directory served over TFTP, for devices to fetch configuration
-tftp_directory = "target/tftp"
+tftp_directory = "/srv/tftp"
 
 # Use localhost as a device (not terribly useful)
-[devices.local]
-agent = "http://[::1]:8673"
+[devices.elessar]
+agent = "http://elessar.local:8673"
 mac_address = "b4:2e:99:a0:f3:27"
-grub_config = "local.cfg"
+grub_config = "elessar.cfg"
 
-[devices.local.targets.windows]
+[devices.elessar.targets.windows]
 menu_entry = "Windows Boot Manager (on /dev/nvme0n1p2)"
 
-[devices.local.targets.linux]
+[devices.elessar.targets.linux]
 menu_entry = "Arch Linux"

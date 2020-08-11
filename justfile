@@ -11,7 +11,7 @@ local-agent:
 
 sync: pi-controller
     scp target/{{pi_target}}/release/samwise-controller pi@faramir.local:
-    scp example-configs/controller.toml pi@faramir.local:
+    scp example-config/controller.toml pi@faramir.local:
 
 start-agent: local-agent
-    sudo ./target/release/samwise-agent example-config/agent_linux.toml
+    sudo ./target/release/samwise-agent --config example-config/agent_linux.toml
