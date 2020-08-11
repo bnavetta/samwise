@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -10,6 +11,8 @@ use crate::id::DeviceId;
 
 #[derive(Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct Configuration {
+    listen_address: SocketAddr,
+
     devices: HashMap<String, DeviceConfiguration>,
 
     tftp_directory: PathBuf,
@@ -30,6 +33,10 @@ impl Configuration {
     pub fn load(source: &str) -> Result<Configuration> {
         let config = toml::from_str(&source)?;
         Ok(config)
+    }
+
+    pub fn listen_address(&self) -> SocketAddr {
+        self.listen_address
     }
 
     pub fn devices<'a>(&'a self) -> impl Iterator<Item = DeviceId> + 'a {
@@ -69,7 +76,7 @@ pub struct DeviceConfiguration {
 
     grub_config: PathBuf,
 
-    targets: HashMap<String, TargetConfiguration>
+    targets: HashMap<String, TargetConfiguration>,
 }
 
 impl DeviceConfiguration {

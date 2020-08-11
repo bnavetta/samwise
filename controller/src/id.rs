@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use serde::Serialize;
+
 /// Identifier referring to a particular device. For example, `htpc` or `my-desktop`.
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -36,7 +38,7 @@ impl slog::Value for DeviceId {
 
 /// Identifier for a bootable target. For example, `windows` or `ubuntu-lts`.
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize)]
 pub struct TargetId(String);
 
 impl TargetId {
@@ -46,6 +48,12 @@ impl TargetId {
 
     pub fn as_string(&self) -> &String {
         &self.0
+    }
+}
+
+impl Into<String> for TargetId {
+    fn into(self) -> String {
+        self.0
     }
 }
 

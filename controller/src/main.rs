@@ -1,20 +1,20 @@
 #![feature(async_closure)]
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use slog::{debug, info, o, Drain, Logger};
 use structopt::StructOpt;
-use tokio::signal;
-use tokio::sync::watch;
 
 use crate::config::Configuration;
-use crate::device::{Device, Action};
+use crate::device::{Action, Device};
 use crate::id::{DeviceId, TargetId};
 use crate::wake::Waker;
 
 mod agent;
 mod device;
+mod server;
 mod wake;
 
 mod config;
@@ -42,79 +42,16 @@ fn create_logger() -> Logger {
     Logger::root(drain, o!())
 }
 
-pub struct Samwise {
-    logger: Logger,
-    config: Configuration,
-    waker: Waker,
-    devices: HashMap<DeviceId, Device>,
-    shutdown_tx: watch::Sender<()>,
-    shutdown_rx: watch::Receiver<()>,
-}
+/// Starts a background task for each configured device, returning a map of device handles
+fn start_devices(logger: &Logger, config: &Configuration) -> Result<HashMap<DeviceId, Device>> {
+    let waker = Waker::new();
+    let mut devices = HashMap::new();
+    for id in config.devices() {
+        let device = Device::start(id.clone(), &config, waker.clone(), logger)?;
 
-impl Samwise {
-    fn new(logger: Logger, config: Configuration) -> Samwise {
-        let (shutdown_tx, shutdown_rx) = watch::channel(());
-        Samwise {
-            logger,
-            config,
-            devices: HashMap::new(),
-            waker: Waker::new(),
-            shutdown_tx,
-            shutdown_rx,
-        }
+        devices.insert(id, device);
     }
-
-    async fn run(mut self) -> Result<()> {
-        info!(&self.logger, "Starting Samwise controller");
-        self.setup_devices().await?;
-        info!(&self.logger, "Controller started");
-
-        for device in self.devices.values_mut() {
-            device.action(Action::Run(TargetId::new("windows"))).await?;
-        }
-
-        signal::ctrl_c()
-            .await
-            .context("Error waiting for shutdown signal")?;
-        self.shutdown().await?;
-
-        Ok(())
-    }
-
-    async fn setup_devices(&mut self) -> Result<()> {
-        for id in self.config.devices() {
-            let device = Device::start(
-                id.clone(),
-                &self.config,
-                self.waker.clone(),
-                self.shutdown_rx.clone(),
-                &self.logger,
-            )?;
-
-            self.devices.insert(id, device);
-        }
-
-        Ok(())
-    }
-
-    async fn shutdown(self) -> Result<()> {
-        let Samwise {
-            logger,
-            devices,
-            mut shutdown_tx,
-            shutdown_rx,
-            ..
-        } = self;
-
-        info!(&logger, "Shutting down");
-
-        drop(shutdown_rx); // Otherwise the .closed() call below will never complete
-        drop(devices); // This will close channels to devices and allow them to shut down
-
-        // Wait for all spawned tasks to drop their shutdown receivers
-        shutdown_tx.closed().await;
-        Ok(())
-    }
+    Ok(devices)
 }
 
 #[tokio::main]
@@ -125,6 +62,8 @@ async fn main() -> Result<()> {
     debug!(&logger, "Loading configuration"; "path" => args.config_path.display());
     let config = Configuration::load_file(&args.config_path).await?;
 
-    let samwise = Samwise::new(logger, config);
-    samwise.run().await
+    let devices = Arc::new(start_devices(&logger, &config)?);
+
+    server::serve(logger.clone(), devices, config.listen_address()).await;
+    Ok(())
 }

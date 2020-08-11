@@ -7,14 +7,18 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0"
+cfg-if = "0.1"
+itertools = "0.9"
+slog = "2.5"
+slog-async = "2.5"
+slog-term = "2.6"
+structopt = "0.3"
 tonic = "0.3"
-tokio = { version = "0.2", features = ["macros"] }
+tokio = { version = "0.2", features = ["macros", "fs"] }
+toml = "0.5"
 samwise-proto = { path = "../proto" }
 
-[package.metadata.deb]
-depends = "$auto, systemd, grub2-common"
-assets = [
-    [ "deb-assets/50_samwise", "/etc/grub.d/", "644" ]
-
-    # TODO: try CAP_SYS_BOOT first ["deb-assets/10-samwise-agent.rules", "usr/share/polkit-1/rules.d/", "644"]
-]
+[dependencies.serde]
+version = "1.0"
+features = [ "derive" ]

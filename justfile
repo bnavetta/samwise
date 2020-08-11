@@ -1,7 +1,17 @@
-cross_target := "armv7-unknown-linux-gnueabihf"
+pi_target := "armv7-unknown-linux-gnueabihf"
 
-cross-controller:
-    cross build -p samwise-controller --target {{cross_target}} --release
+pi-controller:
+    cross build -p samwise-controller --target {{pi_target}} --release
 
-sync: cross-controller
-    scp target/armv7-unknown-linux-gnueabihf/release/samwise-controller pi@faramir.local:
+local-controller:
+    cargo build -p samwise-controller --release
+
+local-agent:
+    cargo build -p samwise-agent --release
+
+sync: pi-controller
+    scp target/{{pi_target}}/release/samwise-controller pi@faramir.local:
+    scp example-configs/controller.toml pi@faramir.local:
+
+start-agent: local-agent
+    sudo ./target/release/samwise-agent example-config/agent_linux.toml

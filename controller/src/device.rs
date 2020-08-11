@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Context, Result};
 use pnet::util::MacAddr;
 use slog::{debug, error, o, trace, Logger};
-use tokio::io::*;
 use tokio::fs::OpenOptions;
+use tokio::io::*;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::time;
@@ -73,7 +73,6 @@ async fn state_poller(
     logger: Logger,
     mut agent: AgentConnection,
     mut state_tx: watch::Sender<State>,
-    shutdown_rx: watch::Receiver<()>,
 ) {
     // TODO: may want to make this configurable
     let mut tick = time::interval(PING_INTERVAL);
@@ -94,9 +93,7 @@ async fn state_poller(
             }
         }
     }
-
     trace!(&logger, "Closing state poller");
-    drop(shutdown_rx); // Signal that we're done
 }
 
 struct Handler {
@@ -112,10 +109,6 @@ struct Handler {
 
     state_rx: watch::Receiver<State>,
     action_rx: mpsc::Receiver<Action>,
-
-    /// Receiver for signaling that this handler task has exited. When the Handler is dropped, the
-    /// channel will automatically be closed
-    _shutdown_rx: watch::Receiver<()>,
 }
 
 impl Handler {
@@ -129,7 +122,10 @@ impl Handler {
             };
 
             if let Err(error) = result {
-                error!(&self.logger, "Handling {} action failed: {:?}", action, error);
+                error!(
+                    &self.logger,
+                    "Handling {} action failed: {:?}", action, error
+                );
             }
         }
 
@@ -228,12 +224,28 @@ impl Handler {
                     .write(true)
                     .truncate(true)
                     .open(&self.grub_config)
-                    .await.with_context(|| format!("Could not open GRUB config file `{}`", self.grub_config.display()))?;
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Could not open GRUB config file `{}`",
+                            self.grub_config.display()
+                        )
+                    })?;
 
-                let contents = format!("set {}=\"{}\"\nexport {}\n", GRUB_MENU_ENTRY_VAR, target.menu_entry(), GRUB_MENU_ENTRY_VAR);
-                file.write_all(contents.as_bytes()).await.with_context(|| format!("Could not write to GRUB config file `{}`", self.grub_config.display()))?;
+                let contents = format!(
+                    "set {}=\"{}\"\nexport {}\n",
+                    GRUB_MENU_ENTRY_VAR,
+                    target.menu_entry(),
+                    GRUB_MENU_ENTRY_VAR
+                );
+                file.write_all(contents.as_bytes()).await.with_context(|| {
+                    format!(
+                        "Could not write to GRUB config file `{}`",
+                        self.grub_config.display()
+                    )
+                })?;
                 Ok(())
-            },
+            }
             None => bail!("No such target `{}`", target),
         }
     }
@@ -258,7 +270,7 @@ impl Handler {
     /// Waits for the device to be in any running state.
     async fn await_running(&self) -> Result<()> {
         self.await_state(|state| matches!(state, State::Running(_)))
-        .await
+            .await
     }
 
     /// Waits for the device to be off or suspended.
@@ -302,7 +314,6 @@ impl Device {
         id: DeviceId,
         config: &Configuration,
         waker: Waker,
-        shutdown_rx: watch::Receiver<()>,
         logger: &Logger,
     ) -> Result<Device> {
         let device_config = match config.device_config(&id) {
@@ -319,13 +330,7 @@ impl Device {
 
         let state_logger = logger.clone();
         let state_agent = agent.clone();
-        let state_shutdown_rx = shutdown_rx.clone();
-        let _ = tokio::spawn(state_poller(
-            state_logger,
-            state_agent,
-            state_tx,
-            state_shutdown_rx,
-        ));
+        let _ = tokio::spawn(state_poller(state_logger, state_agent, state_tx));
 
         let mut handler = Handler {
             id: id.clone(),
@@ -341,7 +346,6 @@ impl Device {
             grub_config: config.tftp_directory().join(device_config.grub_config()),
             state_rx: state_rx.clone(),
             action_rx,
-            _shutdown_rx: shutdown_rx,
         };
 
         let _ = tokio::spawn(async move {
@@ -355,6 +359,10 @@ impl Device {
             state_rx,
             action_tx,
         })
+    }
+
+    pub fn id(&self) -> &DeviceId {
+        &self.id
     }
 
     /// Tells the device to perform an action.
