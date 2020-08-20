@@ -34,6 +34,7 @@ jobs:
           toolchain: nightly
           override: true
           profile: minimal
+          components: rustfmt
           target: "${{ matrix.target }}"
 
       - name: Cache Cargo dependencies
