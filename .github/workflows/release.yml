@@ -25,7 +25,16 @@ jobs:
     name: "Build for ${{ matrix.target }}"
     runs-on: "${{ matrix.os }}"
     steps:
-      - uses: actions/checkout@v2
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Install Cargo toolchain
+        uses: actions-rs/toolchain@v2
+        with:
+          toolchain: nightly
+          override: true
+          profile: minimal
+          target: "${{ matrix.target }}"
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v2
@@ -42,7 +51,6 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           use-cross: "${{ matrix.cross }}"
-          toolchain: nightly
           command: build
           args: --target ${{ matrix.target }} --release
 
