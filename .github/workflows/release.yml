@@ -34,7 +34,6 @@ jobs:
               ext: '.exe'
     name: "Build for ${{ matrix.target }}"
     runs-on: "${{ matrix.os }}"
-    needs: create_release
     steps:
       - name: Check out code
         uses: actions/checkout@v2
