@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use slog::{debug, info, o, Drain, Logger};
+use anyhow::Result;
+use slog::{debug, o, Drain, Logger};
 use structopt::StructOpt;
 
 use crate::config::Configuration;
-use crate::device::{Action, Device};
-use crate::id::{DeviceId, TargetId};
+use crate::device::Device;
+use crate::id::DeviceId;
 use crate::wake::Waker;
 
 mod agent;
