@@ -2,7 +2,8 @@
 
 name: Release
 on:
-  - push
+  release:
+    types: [published]
 
 jobs:
   build:
@@ -18,18 +19,22 @@ jobs:
               cross: true
               build-controller: true
               build-agent: false
+              ext: ''
             - target: x86_64-unknown-linux-gnu
               os: ubuntu-latest
               cross: false
               build-controller: true
               build-agent: true
+              ext: ''
             - target: x86_64-pc-windows-msvc
               os: windows-latest
               cross: false
               build-controller: false
               build-agent: true
+              ext: '.exe'
     name: "Build for ${{ matrix.target }}"
     runs-on: "${{ matrix.os }}"
+    needs: create_release
     steps:
       - name: Check out code
         uses: actions/checkout@v2
@@ -69,4 +74,36 @@ jobs:
           command: build
           args: --target ${{ matrix.target }} --release -p samwise-agent
         if: matrix.build-agent
+      
+      - name: Get release info
+        uses: octokit/request-action@v2
+        id: release
+        with:
+          route: GET /repos/:repository/releases/tags/:tag
+          repository: ${{ github.repository }}
+          tag: ${{ github.ref }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
 
+      - name: Attach samwise-controller binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ fromJson(steps.release.outputs.data).upload_url }}
+          asset_path: target/${{ matrix.target }}/release/samwise-controller${{ matrix.ext }}
+          asset_name: samwise-controller-${{ matrix.target }}
+          asset_content_type: application/octet-stream
+        if: matrix.build-controller
+      
+      - name: Attach samwise-agent binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ fromJson(steps.release.outputs.data).upload_url }}
+          asset_path: target/${{ matrix.target }}/release/samwise-agent${{ matrix.ext }}
+          asset_name: samwise-agent-${{ matrix.target }}
+          asset_content_type: application/octet-stream
+        if: matrix.build-agent
+      
