@@ -71,7 +71,7 @@ jobs:
         if: matrix.build-agent
       
       - name: Upload binaries
-        uses: actions/upload-artifacts@v2
+        uses: actions/upload-artifact@v2
         with:
           name: binaries-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/samwise-*
