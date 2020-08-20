@@ -75,7 +75,7 @@ jobs:
         if: matrix.build-agent
       
       - name: Get release info
-        uses: octokit/request-action@v2
+        uses: octokit/request-action@v2.0.12
         id: release
         with:
           route: GET /repos/:repository/releases/tags/:tag
