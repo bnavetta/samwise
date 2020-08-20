@@ -16,12 +16,18 @@ jobs:
             - target: armv7-unknown-linux-gnueabihf
               os: ubuntu-latest
               cross: true
+              build-controller: true
+              build-agent: false
             - target: x86_64-unknown-linux-gnu
               os: ubuntu-latest
               cross: false
+              build-controller: true
+              build-agent: true
             - target: x86_64-pc-windows-msvc
               os: windows-latest
               cross: false
+              build-controller: false
+              build-agent: true
     name: "Build for ${{ matrix.target }}"
     runs-on: "${{ matrix.os }}"
     steps:
@@ -48,10 +54,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build release binaries
+      - name: Build samwise-controller
         uses: actions-rs/cargo@v1
         with:
           use-cross: "${{ matrix.cross }}"
           command: build
-          args: --target ${{ matrix.target }} --release
+          args: --target ${{ matrix.target }} --release -p samwise-controller
+        if: matrix.build-controller
+      
+      - name: Build samwise-agent
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: "${{ matrix.cross }}"
+          command: build
+          args: --target ${{ matrix.target }} --release -p samwise-agent
+        if: matrix.build-agent
 
