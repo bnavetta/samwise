@@ -1,5 +1,5 @@
 # IP address and port for the controller to listen on
-listen_address = "[::1]:9090"
+listen_address = "[::1]:9901"
 
 # Default network interface when sending WoL packets. Can be overridden per-device
 default_interface = "eth0"

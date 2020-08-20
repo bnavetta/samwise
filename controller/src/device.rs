@@ -326,7 +326,7 @@ impl Device {
             .with_context(|| format!("Bad agent for device {}", id))?;
 
         let (state_tx, state_rx) = watch::channel(State::Unknown);
-        let (action_tx, action_rx) = mpsc::channel(1);
+        let (action_tx, action_rx) = mpsc::channel(0);
 
         let state_logger = logger.clone();
         let state_agent = agent.clone();
@@ -365,12 +365,12 @@ impl Device {
         &self.id
     }
 
-    /// Tells the device to perform an action.
+    /// Tells the device to perform an action. If the device is busy, this will fail immediately.
     pub async fn action(&mut self, action: Action) -> Result<()> {
         self.action_tx
-            .send(action)
-            .await
-            .with_context(|| format!("Could not send action to device {:?}", self.id))
+            .try_send(action)
+            .with_context(|| format!("Could not send action to device {:?}", self.id))?;
+        Ok(())
     }
 
     /// The most recent observed state of this device.
