@@ -326,7 +326,7 @@ impl Device {
             .with_context(|| format!("Bad agent for device {}", id))?;
 
         let (state_tx, state_rx) = watch::channel(State::Unknown);
-        let (action_tx, action_rx) = mpsc::channel(0);
+        let (action_tx, action_rx) = mpsc::channel(1);
 
         let state_logger = logger.clone();
         let state_agent = agent.clone();

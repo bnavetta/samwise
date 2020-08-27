@@ -1,5 +1,0 @@
-# IP address and port to bind to.
-listen_address = "[::]:8673"
-
-# Target name to report to the controller
-target_name = "linux"

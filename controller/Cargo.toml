@@ -8,7 +8,6 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-slog = "2.5"
 slog-async = "2.5"
 slog-term = "2.6"
 structopt = "0.3"
@@ -21,6 +20,10 @@ samwise-proto = { path = "../proto" }
 [dependencies.serde]
 version = "1.0"
 features = [ "derive" ]
+
+[dependencies.slog]
+version = "2.5"
+features = [ "max_level_trace", "release_max_level_info" ]
 
 [dependencies.pnet]
 version = "0.26"
